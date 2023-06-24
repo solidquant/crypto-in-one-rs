@@ -1,27 +1,16 @@
 use futures::{SinkExt, StreamExt};
 use serde_derive::{Deserialize, Serialize};
 use serde_json;
+use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use tracing::info;
 use tungstenite::Message;
 use url::Url;
 
+use crate::error::SocketError;
 use crate::exchanges::formatter::OrderbookFormatter;
 
-#[derive(thiserror::Error, Debug)]
-pub enum BinanceSocketError {
-    ConnectionError(tungstenite::Error),
-    SerdeJsonError(serde_json::Error),
-}
-
-impl std::fmt::Display for BinanceSocketError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BinanceSocketError::ConnectionError(e) => write!(f, "Binance ConnectionError: {e:?}"),
-            BinanceSocketError::SerdeJsonError(e) => write!(f, "Binance SerdeJsonError: {e:?}"),
-        }
-    }
-}
+use crate::exchanges::formatter::Orderbook;
 
 #[derive(Debug, Deserialize)]
 pub struct BinanceDepth {
@@ -45,7 +34,8 @@ pub struct Subscription {
 
 pub fn binance_orderbook_stream(
     symbols: Vec<&'static str>,
-) -> JoinHandle<Result<(), BinanceSocketError>> {
+    tx: Sender<Orderbook>,
+) -> JoinHandle<Result<(), SocketError>> {
     let symbols = symbols.into_iter().map(|x| x.to_string());
 
     let stream_handle = tokio::spawn(async move {
@@ -60,7 +50,7 @@ pub fn binance_orderbook_stream(
 
             let (mut stream, _) = tokio_tungstenite::connect_async(url)
                 .await
-                .map_err(BinanceSocketError::ConnectionError)?;
+                .map_err(SocketError::BinanceConnectionError)?;
 
             let subscription = Subscription {
                 method: String::from("SUBSCRIBE"),
@@ -79,9 +69,11 @@ pub fn binance_orderbook_stream(
                     tungstenite::Message::Text(raw_msg) => {
                         if raw_msg.contains("depthUpdate") {
                             let data: BinanceDepth = serde_json::from_str(&raw_msg)
-                                .map_err(BinanceSocketError::SerdeJsonError)?;
+                                .map_err(SocketError::BinanceSerdeJsonError)?;
                             let formatted = OrderbookFormatter::from_binance(data);
-                            info!("{:?}", formatted);
+                            tx.send(formatted)
+                                .await
+                                .expect("Failed to send Orderbook data");
                         }
                     }
                     tungstenite::Message::Ping(_) => {

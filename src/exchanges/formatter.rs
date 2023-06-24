@@ -1,13 +1,52 @@
 // use chrono::{DateTime, TimeZone, Utc};
 use rust_decimal::prelude::*;
+use rust_decimal_macros::dec;
 
-use crate::exchanges::binance::BinanceDepth;
-use crate::exchanges::bybit::BybitDepth;
+use crate::exchanges::binance::ws::BinanceDepth;
+use crate::exchanges::bybit::ws::BybitDepth;
 
 #[derive(Debug)]
 pub enum Exchange {
     Binance,
     Bybit,
+}
+
+#[derive(Debug)]
+pub enum Instrument {
+    USDM,
+}
+
+#[derive(Debug)]
+pub struct SymbolInfo {
+    pub exchange: Exchange,
+    pub instrument: Instrument,
+    pub symbol: String,
+    pub price_tick_size: Decimal,
+    pub limit_max_qty: Decimal,
+    pub limit_min_qty: Decimal,
+    pub limit_step_size: Decimal,
+    pub market_max_qty: Decimal,
+    pub market_min_qty: Decimal,
+    pub market_step_size: Decimal,
+    pub min_notional: Decimal,
+}
+
+impl SymbolInfo {
+    pub fn new(exchange: Exchange, instrument: Instrument, symbol: String) -> Self {
+        Self {
+            exchange,
+            instrument,
+            symbol,
+            price_tick_size: dec!(0),
+            limit_max_qty: dec!(0),
+            limit_min_qty: dec!(0),
+            limit_step_size: dec!(0),
+            market_max_qty: dec!(0),
+            market_min_qty: dec!(0),
+            market_step_size: dec!(0),
+            min_notional: dec!(0),
+        }
+    }
 }
 
 #[derive(Debug)]

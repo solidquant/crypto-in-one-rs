@@ -5,27 +5,16 @@ use serde_derive::{Deserialize, Serialize};
 use serde_json;
 use std::collections::HashMap;
 use std::time::SystemTime;
+use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use tracing::info;
 use tungstenite::Message;
 use url::Url;
 
+use crate::error::SocketError;
 use crate::exchanges::formatter::OrderbookFormatter;
 
-#[derive(thiserror::Error, Debug)]
-pub enum BybitSocketError {
-    ConnectionError(tungstenite::Error),
-    SerdeJsonError(serde_json::Error),
-}
-
-impl std::fmt::Display for BybitSocketError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BybitSocketError::ConnectionError(e) => write!(f, "Bybit ConnectionError: {e:?}"),
-            BybitSocketError::SerdeJsonError(e) => write!(f, "Bybit SerdeJsonError: {e:?}"),
-        }
-    }
-}
+use crate::exchanges::formatter::Orderbook;
 
 #[derive(Debug, Deserialize)]
 pub struct BybitDepth {
@@ -129,7 +118,8 @@ impl BybitOrderbook {
 
 pub fn bybit_orderbook_stream(
     symbols: Vec<&'static str>,
-) -> JoinHandle<Result<(), BybitSocketError>> {
+    tx: Sender<Orderbook>,
+) -> JoinHandle<Result<(), SocketError>> {
     let symbols = symbols.into_iter().map(|x| x.to_string());
     let mut orderbook = BybitOrderbook::from(symbols.clone());
 
@@ -146,7 +136,7 @@ pub fn bybit_orderbook_stream(
 
             let (mut stream, _) = tokio_tungstenite::connect_async(url)
                 .await
-                .map_err(BybitSocketError::ConnectionError)?;
+                .map_err(SocketError::BybitConnectionError)?;
 
             let subscription = Subscription {
                 op: String::from("subscribe"),
@@ -166,7 +156,7 @@ pub fn bybit_orderbook_stream(
                     tungstenite::Message::Text(raw_msg) => {
                         if raw_msg.contains("orderbook.50") {
                             let data: BybitDepth = serde_json::from_str(&raw_msg)
-                                .map_err(BybitSocketError::SerdeJsonError)?;
+                                .map_err(SocketError::BybitSerdeJsonError)?;
 
                             if data.data_type == "snapshot".to_string() {
                                 orderbook.init_orderbook(&data.data);
@@ -185,7 +175,9 @@ pub fn bybit_orderbook_stream(
 
                             let formatted =
                                 OrderbookFormatter::from_bybit(data, sorted_bids, sorted_asks);
-                            info!("{:?}", formatted);
+                            tx.send(formatted)
+                                .await
+                                .expect("Failed to send Orderbook data");
                         }
 
                         // send pong frames every 15 seconds
